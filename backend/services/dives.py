@@ -209,31 +209,28 @@ def gear_report(db: Session, signups: list[Signup]) -> list[dict]:
         )
 
     fin_inventory = [row for row in inventory if row.category == GearCategory.fins]
+    fin_ranges: dict[tuple[float, float], int] = {}
     for item in fin_inventory:
-        label = f"US {item.min_shoe_size:g}–{item.max_shoe_size:g}"
+        key = (item.min_shoe_size, item.max_shoe_size)
+        fin_ranges[key] = fin_ranges.get(key, 0) + item.quantity
+    ranges = [(*size_range, quantity) for size_range, quantity in fin_ranges.items()]
+    confirmed_by_range, confirmed_unmatched = _allocate_fins(ranges, confirmed)
+    waitlisted_by_range, waitlisted_unmatched = _allocate_fins(ranges, waitlisted)
+    for index, (minimum, maximum, quantity) in enumerate(ranges):
+        label = f"US {minimum:g}–{maximum:g}"
         report.append(
             _gear_row(
                 "fins",
                 label,
-                item.quantity,
-                sum(
-                    item.min_shoe_size <= signup.shoe_size <= item.max_shoe_size
-                    for signup in confirmed
-                ),
-                sum(
-                    item.min_shoe_size <= signup.shoe_size <= item.max_shoe_size
-                    for signup in waitlisted
-                ),
+                quantity,
+                confirmed_by_range[index],
+                waitlisted_by_range[index],
             )
         )
-    for pool, status_label in ((confirmed, "confirmed"), (waitlisted, "waitlisted")):
-        unmatched = Counter(
-            signup.shoe_size
-            for signup in pool
-            if not any(
-                row.min_shoe_size <= signup.shoe_size <= row.max_shoe_size for row in fin_inventory
-            )
-        )
+    for unmatched, status_label in (
+        (confirmed_unmatched, "confirmed"),
+        (waitlisted_unmatched, "waitlisted"),
+    ):
         for shoe_size, needed in unmatched.items():
             existing = next(
                 (
@@ -257,6 +254,25 @@ def gear_report(db: Session, signups: list[Signup]) -> list[dict]:
             )
         )
     return report
+
+
+def _allocate_fins(ranges: list[tuple[float, float, int]], signups: list[Signup]):
+    remaining = [quantity for _, _, quantity in ranges]
+    assigned = [0] * len(ranges)
+    unmatched = Counter()
+    for signup in sorted(signups, key=lambda item: item.shoe_size):
+        compatible = [
+            index
+            for index, (minimum, maximum, _) in enumerate(ranges)
+            if remaining[index] and minimum <= signup.shoe_size <= maximum
+        ]
+        if not compatible:
+            unmatched[signup.shoe_size] += 1
+            continue
+        selected = min(compatible, key=lambda index: (ranges[index][1], ranges[index][0]))
+        remaining[selected] -= 1
+        assigned[selected] += 1
+    return assigned, unmatched
 
 
 def _gear_row(category: str, label: str, available: int, confirmed: int, waitlisted: int) -> dict:
@@ -356,15 +372,6 @@ def promote_signup(db: Session, signup_id: uuid.UUID) -> Signup:
 
 def save_inventory(db: Session, payload: InventoryInput) -> Inventory:
     rows = list(db.scalars(select(Inventory).where(Inventory.category == payload.category)))
-    if payload.category == GearCategory.fins:
-        if any(
-            not (
-                payload.max_shoe_size < row.min_shoe_size
-                or payload.min_shoe_size > row.max_shoe_size
-            )
-            for row in rows
-        ):
-            raise ConflictError("Fin size ranges cannot overlap")
     if payload.category == GearCategory.wetsuit and any(
         row.suit_size == payload.suit_size for row in rows
     ):

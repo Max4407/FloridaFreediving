@@ -190,11 +190,6 @@ def edit_inventory(item_id: uuid.UUID, payload: InventoryInput, db: Session = De
             select(Inventory).where(Inventory.id != item_id, Inventory.category == payload.category)
         )
     )
-    if payload.category.value == "fins" and any(
-        not (payload.max_shoe_size < row.min_shoe_size or payload.min_shoe_size > row.max_shoe_size)
-        for row in other_rows
-    ):
-        raise HTTPException(status_code=409, detail="Fin size ranges cannot overlap")
     if payload.category.value == "wetsuit" and any(
         row.suit_size == payload.suit_size for row in other_rows
     ):

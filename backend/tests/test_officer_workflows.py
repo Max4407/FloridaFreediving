@@ -57,6 +57,58 @@ def test_gear_and_staffing_warnings_use_confirmed_demand(db, officer_client, div
     assert masks["waitlisted_needed"] == 1
 
 
+def test_overlapping_fin_ranges_share_demand_without_false_shortage(
+    officer_client, dive_payload
+):
+    dive_payload["capacity"] = 2
+    dive = create_dive(officer_client, dive_payload)
+    inventory = [
+        {"category": "wetsuit", "suit_size": "M", "quantity": 2},
+        {"category": "fins", "min_shoe_size": 5, "max_shoe_size": 7, "quantity": 1},
+        {"category": "fins", "min_shoe_size": 6, "max_shoe_size": 8, "quantity": 1},
+        {"category": "mask", "quantity": 2},
+        {"category": "weight_set", "quantity": 2},
+    ]
+    created = [
+        officer_client.post("/api/officer/inventory", json=item, headers=ORIGIN)
+        for item in inventory
+    ]
+    assert all(response.status_code == 201 for response in created)
+
+    edited = officer_client.put(
+        f"/api/officer/inventory/{created[2].json()['id']}",
+        json={
+            "category": "fins",
+            "min_shoe_size": 5.5,
+            "max_shoe_size": 8.5,
+            "quantity": 1,
+        },
+        headers=ORIGIN,
+    )
+    assert edited.status_code == 200
+
+    for index in range(2):
+        response = officer_client.post(
+            f"/api/public/dives/{dive['public_id']}/signups",
+            json={
+                "name": f"Fin Diver {index}",
+                "email": f"fins{index}@example.com",
+                "needs_carpool": False,
+                "needs_gear": True,
+                "suit_size": "M",
+                "shoe_size": 6.5,
+            },
+        )
+        assert response.status_code == 201
+
+    detail = officer_client.get(f"/api/officer/dives/{dive['id']}").json()
+    fin_rows = [row for row in detail["gear"] if row["category"] == "fins"]
+
+    assert sum(row["confirmed_needed"] for row in fin_rows) == 2
+    assert not any(row["shortage"] for row in fin_rows)
+    assert "Loaner gear demand exceeds inventory" not in detail["warnings"]
+
+
 def test_deleting_dive_cascades_signups(db, officer_client, dive_payload):
     from sqlalchemy import func, select
 
