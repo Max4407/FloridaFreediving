@@ -1,0 +1,5 @@
+aws_region            = "us-east-1"
+domain_name           = "floridafreediving.com"
+image_tag             = "0123456789abcdef"
+officer_password_hash = "$2b$12$replace-with-a-real-bcrypt-hash"
+
