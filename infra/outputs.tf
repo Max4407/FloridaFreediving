@@ -2,20 +2,18 @@ output "ecr_repository_url" {
   value = aws_ecr_repository.app.repository_url
 }
 
-output "express_service_arn" {
-  value = aws_ecs_express_gateway_service.app.service_arn
+output "instance_id" {
+  value = aws_instance.app.id
 }
 
-output "express_endpoint" {
-  value = aws_ecs_express_gateway_service.app.ingress_paths[0].endpoint
+output "public_ip" {
+  value = aws_eip.app.public_ip
 }
 
-output "certificate_arn" {
-  value = aws_acm_certificate_validation.app.certificate_arn
+output "application_url" {
+  value = "https://${var.domain_name}"
 }
 
-output "database_endpoint" {
-  value     = aws_db_instance.main.endpoint
-  sensitive = true
+output "data_volume_id" {
+  value = aws_ebs_volume.data.id
 }
-

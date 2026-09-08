@@ -26,28 +26,76 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.12.2"
+
       - name: Initialize Terraform
         working-directory: infra
         run: terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" -backend-config="key=florida-freediving/terraform.tfstate" -backend-config="region=us-east-1" -backend-config="use_lockfile=true"
-      - name: Login to ECR
-        id: ecr
-        uses: aws-actions/amazon-ecr-login@v2
-      - name: Build and push image
-        env:
-          REGISTRY: ${{ steps.ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
-        run: |
-          docker build -t "$REGISTRY/florida-freediving:$IMAGE_TAG" .
-          docker push "$REGISTRY/florida-freediving:$IMAGE_TAG"
+
       - name: Plan infrastructure
         working-directory: infra
         env:
-          TF_VAR_image_tag: ${{ github.sha }}
           TF_VAR_officer_password_hash: ${{ secrets.OFFICER_PASSWORD_HASH }}
         run: terraform plan -out=tfplan
+
       - name: Apply infrastructure
         working-directory: infra
         run: terraform apply -auto-approve tfplan
-      - name: Verify service health
+
+      - name: Read deployment targets
+        id: infrastructure
         working-directory: infra
-        run: curl --fail --retry 10 --retry-delay 6 "$(terraform output -raw express_endpoint)/health"
+        run: |
+          echo "repository=$(terraform output -raw ecr_repository_url)" >> "$GITHUB_OUTPUT"
+          echo "instance=$(terraform output -raw instance_id)" >> "$GITHUB_OUTPUT"
+          echo "url=$(terraform output -raw application_url)" >> "$GITHUB_OUTPUT"
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        env:
+          IMAGE: ${{ steps.infrastructure.outputs.repository }}:${{ github.sha }}
+        run: |
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+
+      - name: Wait for Systems Manager
+        env:
+          INSTANCE_ID: ${{ steps.infrastructure.outputs.instance }}
+        run: |
+          for attempt in $(seq 1 60); do
+            status=$(aws ssm describe-instance-information --filters "Key=InstanceIds,Values=$INSTANCE_ID" --query "InstanceInformationList[0].PingStatus" --output text)
+            if [ "$status" = "Online" ]; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "EC2 instance did not register with Systems Manager" >&2
+          exit 1
+
+      - name: Deploy image through Systems Manager
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+          INSTANCE_ID: ${{ steps.infrastructure.outputs.instance }}
+        run: |
+          command_id=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --comment "Deploy Florida Freediving $IMAGE_TAG" \
+            --parameters "commands=for attempt in \$(seq 1 60); do test -x /usr/local/bin/deploy-florida-freediving && break; sleep 5; done; test -x /usr/local/bin/deploy-florida-freediving; /usr/local/bin/deploy-florida-freediving $IMAGE_TAG" \
+            --query "Command.CommandId" \
+            --output text)
+          set +e
+          aws ssm wait command-executed --command-id "$command_id" --instance-id "$INSTANCE_ID"
+          wait_status=$?
+          set -e
+          aws ssm get-command-invocation \
+            --command-id "$command_id" \
+            --instance-id "$INSTANCE_ID" \
+            --query "{Status:Status,Output:StandardOutputContent,Errors:StandardErrorContent}"
+          exit "$wait_status"
+
+      - name: Verify public health
+        env:
+          APPLICATION_URL: ${{ steps.infrastructure.outputs.url }}
+        run: curl --fail --retry 10 --retry-delay 6 "$APPLICATION_URL/health"

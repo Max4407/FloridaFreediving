@@ -7,7 +7,9 @@ data "aws_route53_zone" "main" {
   private_zone = false
 }
 
-data "aws_caller_identity" "current" {}
+data "aws_ssm_parameter" "amazon_linux" {
+  name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
+}
 
 resource "aws_vpc" "main" {
   cidr_block           = "10.42.0.0/16"
@@ -23,13 +25,12 @@ resource "aws_internet_gateway" "main" {
 }
 
 resource "aws_subnet" "app" {
-  count                   = 2
   vpc_id                  = aws_vpc.main.id
-  availability_zone       = data.aws_availability_zones.available.names[count.index]
-  cidr_block              = cidrsubnet(aws_vpc.main.cidr_block, 8, count.index)
+  availability_zone       = data.aws_availability_zones.available.names[0]
+  cidr_block              = cidrsubnet(aws_vpc.main.cidr_block, 8, 0)
   map_public_ip_on_launch = true
 
-  tags = { Name = "${var.project_name}-app-${count.index + 1}" }
+  tags = { Name = "${var.project_name}-app" }
 }
 
 resource "aws_route_table" "app" {
@@ -42,22 +43,37 @@ resource "aws_route_table" "app" {
 }
 
 resource "aws_route_table_association" "app" {
-  count          = 2
-  subnet_id      = aws_subnet.app[count.index].id
+  subnet_id      = aws_subnet.app.id
   route_table_id = aws_route_table.app.id
 }
 
-resource "aws_security_group" "app" {
-  name        = "${var.project_name}-app"
-  description = "Application tasks"
+resource "aws_security_group" "web" {
+  name        = "${var.project_name}-web"
+  description = "Public web traffic to Caddy"
   vpc_id      = aws_vpc.main.id
 
   ingress {
-    description = "Express Mode load balancer to application"
-    from_port   = 8000
-    to_port     = 8000
+    description = "HTTP and ACME challenges"
+    from_port   = 80
+    to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = [aws_vpc.main.cidr_block]
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "HTTPS"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "HTTP3"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "udp"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   egress {
@@ -66,24 +82,6 @@ resource "aws_security_group" "app" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
-}
-
-resource "aws_security_group" "database" {
-  name        = "${var.project_name}-database"
-  description = "PostgreSQL from application tasks only"
-  vpc_id      = aws_vpc.main.id
-
-  ingress {
-    from_port       = 5432
-    to_port         = 5432
-    protocol        = "tcp"
-    security_groups = [aws_security_group.app.id]
-  }
-}
-
-resource "aws_db_subnet_group" "main" {
-  name       = var.project_name
-  subnet_ids = aws_subnet.app[*].id
 }
 
 resource "random_password" "database" {
@@ -96,39 +94,13 @@ resource "random_password" "session" {
   special = false
 }
 
-resource "aws_db_instance" "main" {
-  identifier              = var.project_name
-  engine                  = "postgres"
-  engine_version          = "17"
-  instance_class          = "db.t4g.micro"
-  allocated_storage       = 20
-  max_allocated_storage   = 100
-  storage_type            = "gp3"
-  storage_encrypted       = true
-  db_name                 = "florida_freediving"
-  username                = "florida_freediving"
-  password                = random_password.database.result
-  db_subnet_group_name    = aws_db_subnet_group.main.name
-  vpc_security_group_ids  = [aws_security_group.database.id]
-  publicly_accessible     = false
-  backup_retention_period = 7
-  deletion_protection     = true
-  skip_final_snapshot     = false
-  final_snapshot_identifier = "${var.project_name}-final"
-  apply_immediately         = false
+resource "aws_secretsmanager_secret" "database_password" {
+  name = "${var.project_name}/database-password"
 }
 
-resource "aws_secretsmanager_secret" "database_url" {
-  name = "${var.project_name}/database-url"
-}
-
-resource "aws_secretsmanager_secret_version" "database_url" {
-  secret_id = aws_secretsmanager_secret.database_url.id
-  secret_string = format(
-    "postgresql+psycopg://florida_freediving:%s@%s/florida_freediving?sslmode=require",
-    random_password.database.result,
-    aws_db_instance.main.endpoint,
-  )
+resource "aws_secretsmanager_secret_version" "database_password" {
+  secret_id     = aws_secretsmanager_secret.database_password.id
+  secret_string = random_password.database.result
 }
 
 resource "aws_secretsmanager_secret" "officer_password" {
@@ -154,7 +126,9 @@ resource "aws_ecr_repository" "app" {
   image_tag_mutability = "IMMUTABLE"
   force_delete         = false
 
-  image_scanning_configuration { scan_on_push = true }
+  image_scanning_configuration {
+    scan_on_push = true
+  }
 }
 
 resource "aws_ecr_lifecycle_policy" "app" {
@@ -173,155 +147,188 @@ resource "aws_ecr_lifecycle_policy" "app" {
   })
 }
 
-data "aws_iam_policy_document" "ecs_task_trust" {
+data "aws_iam_policy_document" "ec2_trust" {
   statement {
     actions = ["sts:AssumeRole"]
     principals {
       type        = "Service"
-      identifiers = ["ecs-tasks.amazonaws.com"]
+      identifiers = ["ec2.amazonaws.com"]
     }
   }
 }
 
-data "aws_iam_policy_document" "ecs_service_trust" {
+resource "aws_iam_role" "app" {
+  name               = "${var.project_name}-instance"
+  assume_role_policy = data.aws_iam_policy_document.ec2_trust.json
+}
+
+resource "aws_iam_role_policy_attachment" "ssm" {
+  role       = aws_iam_role.app.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+data "aws_iam_policy_document" "app" {
   statement {
-    actions = ["sts:AssumeRole"]
-    principals {
-      type        = "Service"
-      identifiers = ["ecs.amazonaws.com"]
-    }
+    actions   = ["ecr:GetAuthorizationToken"]
+    resources = ["*"]
   }
-}
 
-resource "aws_iam_role" "execution" {
-  name               = "${var.project_name}-execution"
-  assume_role_policy = data.aws_iam_policy_document.ecs_task_trust.json
-}
+  statement {
+    actions = [
+      "ecr:BatchCheckLayerAvailability",
+      "ecr:BatchGetImage",
+      "ecr:GetDownloadUrlForLayer",
+    ]
+    resources = [aws_ecr_repository.app.arn]
+  }
 
-resource "aws_iam_role_policy_attachment" "execution" {
-  role       = aws_iam_role.execution.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
-}
-
-data "aws_iam_policy_document" "secrets" {
   statement {
     actions = ["secretsmanager:GetSecretValue"]
     resources = [
-      aws_secretsmanager_secret.database_url.arn,
+      aws_secretsmanager_secret.database_password.arn,
       aws_secretsmanager_secret.officer_password.arn,
       aws_secretsmanager_secret.session.arn,
     ]
   }
 }
 
-resource "aws_iam_role_policy" "secrets" {
-  name   = "read-application-secrets"
-  role   = aws_iam_role.execution.id
-  policy = data.aws_iam_policy_document.secrets.json
+resource "aws_iam_role_policy" "app" {
+  name   = "application-runtime"
+  role   = aws_iam_role.app.id
+  policy = data.aws_iam_policy_document.app.json
 }
 
-resource "aws_iam_role" "infrastructure" {
-  name               = "${var.project_name}-infrastructure"
-  assume_role_policy = data.aws_iam_policy_document.ecs_service_trust.json
-}
-
-resource "aws_iam_role_policy_attachment" "infrastructure" {
-  role       = aws_iam_role.infrastructure.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSInfrastructureRoleforExpressGatewayServices"
-}
-
-resource "aws_ecs_cluster" "main" {
+resource "aws_iam_instance_profile" "app" {
   name = var.project_name
+  role = aws_iam_role.app.name
 }
 
-resource "aws_cloudwatch_log_group" "app" {
-  name              = "/ecs/${var.project_name}"
-  retention_in_days = 30
+resource "aws_ebs_volume" "data" {
+  availability_zone = aws_subnet.app.availability_zone
+  encrypted         = true
+  size              = var.data_volume_size
+  type              = "gp3"
+
+  tags = {
+    Name   = "${var.project_name}-data"
+    Backup = var.project_name
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
-resource "aws_ecs_express_gateway_service" "app" {
-  service_name            = var.project_name
-  cluster                 = aws_ecs_cluster.main.name
-  execution_role_arn      = aws_iam_role.execution.arn
-  infrastructure_role_arn = aws_iam_role.infrastructure.arn
-  health_check_path       = "/health"
-  cpu                     = "256"
-  memory                  = "512"
-  wait_for_steady_state   = true
+resource "aws_instance" "app" {
+  ami                         = data.aws_ssm_parameter.amazon_linux.value
+  instance_type               = var.instance_type
+  subnet_id                   = aws_subnet.app.id
+  vpc_security_group_ids      = [aws_security_group.web.id]
+  iam_instance_profile        = aws_iam_instance_profile.app.name
+  associate_public_ip_address = true
+  user_data_replace_on_change = true
+  user_data = templatefile("${path.module}/user_data.sh.tftpl", {
+    aws_region          = var.aws_region
+    caddy_image         = var.caddy_image
+    data_volume_id      = aws_ebs_volume.data.id
+    database_secret_arn = aws_secretsmanager_secret.database_password.arn
+    domain_name         = var.domain_name
+    officer_secret_arn  = aws_secretsmanager_secret.officer_password.arn
+    repository_url      = aws_ecr_repository.app.repository_url
+    session_secret_arn  = aws_secretsmanager_secret.session.arn
+  })
 
-  primary_container {
-    image          = "${aws_ecr_repository.app.repository_url}:${var.image_tag}"
-    container_port = 8000
-
-    aws_logs_configuration {
-      log_group = aws_cloudwatch_log_group.app.name
-    }
-
-    environment {
-      name  = "COOKIE_SECURE"
-      value = "true"
-    }
-    environment {
-      name  = "ALLOWED_ORIGINS"
-      value = "https://${var.domain_name}"
-    }
-    secret {
-      name       = "DATABASE_URL"
-      value_from = aws_secretsmanager_secret.database_url.arn
-    }
-    secret {
-      name       = "OFFICER_PASSWORD_HASH"
-      value_from = aws_secretsmanager_secret.officer_password.arn
-    }
-    secret {
-      name       = "SESSION_SECRET"
-      value_from = aws_secretsmanager_secret.session.arn
-    }
+  metadata_options {
+    http_endpoint = "enabled"
+    http_tokens   = "required"
   }
 
-  network_configuration {
-    subnets         = aws_subnet.app[*].id
-    security_groups = [aws_security_group.app.id]
+  root_block_device {
+    encrypted   = true
+    volume_size = 16
+    volume_type = "gp3"
   }
 
-  scaling_target {
-    min_task_count            = 1
-    max_task_count            = 3
-    auto_scaling_metric       = "REQUEST_COUNT_PER_TARGET"
-    auto_scaling_target_value = 500
-  }
+  tags = { Name = var.project_name }
 
   depends_on = [
-    aws_iam_role_policy_attachment.execution,
-    aws_iam_role_policy.secrets,
-    aws_iam_role_policy_attachment.infrastructure,
-    aws_secretsmanager_secret_version.database_url,
+    aws_iam_role_policy.app,
+    aws_iam_role_policy_attachment.ssm,
+    aws_secretsmanager_secret_version.database_password,
+    aws_secretsmanager_secret_version.officer_password,
+    aws_secretsmanager_secret_version.session,
   ]
 }
 
-resource "aws_acm_certificate" "app" {
-  domain_name       = var.domain_name
-  validation_method = "DNS"
-
-  lifecycle { create_before_destroy = true }
+resource "aws_volume_attachment" "data" {
+  device_name = "/dev/sdf"
+  instance_id = aws_instance.app.id
+  volume_id   = aws_ebs_volume.data.id
 }
 
-resource "aws_route53_record" "certificate_validation" {
-  for_each = {
-    for option in aws_acm_certificate.app.domain_validation_options : option.domain_name => {
-      name   = option.resource_record_name
-      record = option.resource_record_value
-      type   = option.resource_record_type
+resource "aws_eip" "app" {
+  domain   = "vpc"
+  instance = aws_instance.app.id
+
+  tags = { Name = var.project_name }
+}
+
+resource "aws_route53_record" "app" {
+  zone_id = data.aws_route53_zone.main.zone_id
+  name    = var.domain_name
+  type    = "A"
+  ttl     = 300
+  records = [aws_eip.app.public_ip]
+}
+
+data "aws_iam_policy_document" "dlm_trust" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["dlm.amazonaws.com"]
     }
   }
-  zone_id = data.aws_route53_zone.main.zone_id
-  name    = each.value.name
-  type    = each.value.type
-  ttl     = 60
-  records = [each.value.record]
 }
 
-resource "aws_acm_certificate_validation" "app" {
-  certificate_arn         = aws_acm_certificate.app.arn
-  validation_record_fqdns = [for record in aws_route53_record.certificate_validation : record.fqdn]
+resource "aws_iam_role" "dlm" {
+  name               = "${var.project_name}-snapshot-lifecycle"
+  assume_role_policy = data.aws_iam_policy_document.dlm_trust.json
+}
+
+resource "aws_iam_role_policy_attachment" "dlm" {
+  role       = aws_iam_role.dlm.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole"
+}
+
+resource "aws_dlm_lifecycle_policy" "data" {
+  description        = "Daily PostgreSQL data-volume snapshots"
+  execution_role_arn = aws_iam_role.dlm.arn
+  state              = "ENABLED"
+
+  policy_details {
+    resource_types = ["VOLUME"]
+    target_tags = {
+      Backup = var.project_name
+    }
+
+    schedule {
+      name = "Daily snapshots"
+
+      create_rule {
+        interval      = 24
+        interval_unit = "HOURS"
+        times         = ["05:00"]
+      }
+
+      retain_rule {
+        count = 7
+      }
+
+      copy_tags = true
+      tags_to_add = {
+        SnapshotCreator = "DLM"
+      }
+    }
+  }
 }

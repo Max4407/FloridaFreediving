@@ -2,79 +2,86 @@
 
 ## Deployment model
 
-Terraform in `infra/` defines the production AWS environment. The deployable unit is an
-immutable, commit-tagged container containing both the FastAPI server and compiled React
-assets. This same-origin design avoids a separate static-site release, cross-origin cookies,
-and browser-specific API base URLs.
+Terraform in `infra/` defines a low-cost, single-host AWS environment. One Amazon Linux 2023
+EC2 instance runs three Docker containers: Caddy, the immutable FastAPI/React application image,
+and PostgreSQL 17. Caddy is the only public process and replaces a load balancer by terminating
+TLS and reverse-proxying to the app over a private Docker network.
 
-The architecture and application contracts are independent of whether the backing database is
-local SQLite, local PostgreSQL, or Amazon RDS. Runtime values enter exclusively through
-environment variables and Secrets Manager.
+```text
+Internet
+   |
+Route 53 A record -> Elastic IP
+   |
+Caddy container :80/:443
+   |
+FastAPI/React container :8000
+   |
+PostgreSQL container :5432 -> encrypted EBS data volume
+```
 
-## Container image
+The consolidation reduces managed-service costs but creates one failure domain. Host, Docker,
+or availability-zone failure makes the whole application unavailable until recovery. There is
+no automatic horizontal scaling or database failover.
 
-The root `Dockerfile` has two stages:
+## Container responsibilities
 
-1. Node 22 installs locked frontend dependencies and runs the Vite production build.
-2. Python 3.12 installs backend dependencies, copies backend source and frontend `dist/`, then
-   exposes port 8000.
+The root `Dockerfile` builds only the application image. Node 22 compiles the Vite frontend;
+Python 3.12 installs backend dependencies and runs Alembic before Uvicorn. Deployment pulls that
+image from ECR using an immutable commit tag.
 
-At startup the image runs `alembic upgrade head` and only then starts Uvicorn. FastAPI serves
-`/assets`, the JSON API, health check, and SPA fallback. One image therefore represents one
-complete application version and one expected database schema revision.
+The host deployment script starts:
+
+- `ff-caddy` from pinned `caddy:2.11.4-alpine`, with persistent `/data` and `/config` mounts;
+- `ff-app`, configured from a root-only environment file and published only to loopback for
+  host health checks;
+- `ff-postgres` from `postgres:17-alpine`, reachable only by containers on the private network.
+
+Caddy obtains and renews public certificates automatically because the Route 53 A record points
+to the Elastic IP and ports 80/443 are open. Its state is retained on the data disk to avoid
+unnecessary certificate reissuance.
 
 ## AWS resource map
 
 | Layer | Terraform resources and behavior |
 | --- | --- |
-| Network | A `10.42.0.0/16` VPC, internet gateway, two availability-zone application subnets, route table, and scoped security groups. |
-| Compute | ECS cluster plus an ECS Express Gateway Service running 1–3 tasks at 256 CPU units and 512 MiB. Request-count scaling targets 500 requests per target. |
-| Ingress | The Express service provides managed HTTP ingress and checks `/health`. ACM validates the application certificate through Route 53 DNS. |
-| Database | Private, encrypted PostgreSQL 17 RDS (`db.t4g.micro`) with gp3 autoscaling from 20–100 GiB, TLS-required URL, seven-day backups, deletion protection, and final snapshot. |
+| Network | A `10.42.0.0/16` VPC, internet gateway, one public subnet, and a route table. |
+| Compute | One configurable EC2 instance, default `t3.micro`, using the current x86_64 Amazon Linux 2023 AMI from the AWS public SSM parameter. |
+| Ingress | Elastic IP and Route 53 A record. The security group exposes TCP 80/443 and UDP 443; SSH and app/database ports are closed. |
+| Data | Separate encrypted gp3 EBS volume, default 20 GiB, mounted at `/var/lib/florida-freediving`. Terraform prevents its destruction. |
+| Backups | Data Lifecycle Manager takes daily EBS snapshots and retains seven. |
 | Images | ECR repository with immutable tags, scan-on-push, and retention of the latest 20 images. |
-| Secrets | Separate Secrets Manager values for database URL, officer bcrypt hash, and generated session signing secret. |
-| Identity | ECS task execution role reads only the three application secrets; the ECS infrastructure role uses the AWS-managed Express Gateway policy. |
-| Observability | CloudWatch log group `/ecs/{project_name}` with 30-day retention. |
-| State | S3 Terraform backend configured at initialization; native S3 lockfile support serializes state changes. |
+| Secrets | Secrets Manager stores the generated database password, officer bcrypt hash, and generated session secret. |
+| Identity | An EC2 instance profile grants SSM management, read-only access to those secrets, and pull access to the application repository. |
+| State | An encrypted/versioned S3 backend with lockfiles serializes Terraform changes. |
 
-RDS has `publicly_accessible` disabled and accepts PostgreSQL traffic only from the
-application security group. Application tasks accept port 8000 traffic only from within the
-VPC; public routing is owned by the Express service ingress.
+IMDSv2 is mandatory. Docker logs rotate at five 10 MiB files per container. Systems Manager is
+the only administrative path, so no SSH key or inbound management port is provisioned.
 
 ## Configuration boundaries
 
-Terraform variables are `aws_region`, `project_name`, `domain_name`, immutable `image_tag`, and
-sensitive `officer_password_hash`. Terraform outputs expose the ECR URL, Express service ARN
-and endpoint, validated certificate ARN, and a sensitive database endpoint.
+Terraform variables are `aws_region`, `project_name`, `domain_name`, `instance_type`,
+`data_volume_size`, pinned `caddy_image`, and sensitive `officer_password_hash`. Outputs expose
+the ECR URL, instance ID, Elastic IP, HTTPS application URL, and data-volume ID.
 
-The container receives:
+On each application deployment, the instance fetches Secrets Manager values and writes:
 
-| Variable | Source | Purpose |
-| --- | --- | --- |
-| `DATABASE_URL` | Secrets Manager | SQLAlchemy PostgreSQL URL with `sslmode=require`. |
-| `OFFICER_PASSWORD_HASH` | Secrets Manager | Bcrypt hash for the shared password. |
-| `SESSION_SECRET` | Secrets Manager | Signed-cookie secret; rotation invalidates sessions. |
-| `COOKIE_SECURE` | ECS environment (`true`) | Enables Secure and `__Host-` cookie behavior plus HSTS. |
-| `ALLOWED_ORIGINS` | ECS environment | Canonical HTTPS application origin for mutation checks. |
+| Variable | Runtime value |
+| --- | --- |
+| `DATABASE_URL` | PostgreSQL URL targeting `ff-postgres` on the private Docker network. |
+| `OFFICER_PASSWORD_HASH` | Bcrypt hash for shared officer authentication. |
+| `SESSION_SECRET` | Cookie-signing secret; changing it invalidates all sessions. |
+| `COOKIE_SECURE` | `true`, enabling the Secure `__Host-` cookie and HSTS. |
+| `ALLOWED_ORIGINS` | Canonical `https://{domain_name}` origin. |
 
-Secrets are not baked into images or committed. Because sensitive Terraform inputs and generated
-passwords are represented in state, the state bucket must be encrypted, versioned, and limited
-to deployment administrators.
-
-## Domain and TLS
-
-Terraform requests and DNS-validates the ACM certificate. ECS Express Mode manages the load
-balancer listener outside the current Terraform resource input surface, so the validated
-certificate must be associated with the managed listener and the domain must alias the Express
-ingress as a one-time platform connection. Application code requires no change: it continues to
-serve the same origin, and `ALLOWED_ORIGINS` remains the canonical HTTPS domain.
+Secrets are not baked into images or committed. Generated passwords and sensitive inputs remain
+in Terraform state, so the state bucket is itself sensitive and must have tightly scoped access.
 
 ## Persistence and lifecycle
 
-Application tasks are disposable; durable state lives in RDS, Secrets Manager, ECR, CloudWatch,
-and Terraform state. RDS deletion protection and final snapshots guard against accidental
-destruction. Completed dives and participant data remain in the database until an officer
-deletes the dive. Operational data-retention decisions should therefore include member PII and
-database backup retention, not container or task lifetime.
+The EC2 root disk and containers are replaceable. PostgreSQL files plus Caddy certificate state
+live on the separately managed EBS volume, which can be reattached after host replacement in the
+same availability zone. Completed dives and member PII remain until an officer deletes the dive.
 
-See [Delivery and operations](operations.md) for release, migration, and recovery procedures.
+EBS snapshots are crash-consistent. PostgreSQL performs crash recovery when restored, but regular
+logical dumps and restore drills are recommended before the application becomes operationally
+critical. See [Delivery and operations](operations.md) for deployment and recovery procedures.

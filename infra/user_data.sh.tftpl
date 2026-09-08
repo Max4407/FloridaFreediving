@@ -1,0 +1,173 @@
+#!/bin/bash
+set -euo pipefail
+
+dnf install -y docker xfsprogs curl
+mkdir -p /etc/docker
+cat > /etc/docker/daemon.json <<'JSON'
+{
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "5"
+  }
+}
+JSON
+systemctl enable --now docker
+
+data_device=""
+for attempt in $(seq 1 60); do
+  for device in /dev/nvme*n1; do
+    if /sbin/ebsnvme-id "$device" 2>/dev/null | grep -q "${data_volume_id}"; then
+      data_device="$device"
+      break 2
+    fi
+  done
+  sleep 5
+done
+
+if [ -z "$data_device" ]; then
+  echo "Persistent data volume ${data_volume_id} was not attached" >&2
+  exit 1
+fi
+
+if ! blkid "$data_device" >/dev/null 2>&1; then
+  mkfs.xfs "$data_device"
+fi
+
+mkdir -p /var/lib/florida-freediving
+data_uuid=$(blkid -s UUID -o value "$data_device")
+if ! grep -q "$data_uuid" /etc/fstab; then
+  echo "UUID=$data_uuid /var/lib/florida-freediving xfs defaults,nofail 0 2" >> /etc/fstab
+fi
+mountpoint -q /var/lib/florida-freediving || mount /var/lib/florida-freediving
+mkdir -p /var/lib/florida-freediving/postgres
+mkdir -p /var/lib/florida-freediving/caddy-data
+mkdir -p /var/lib/florida-freediving/caddy-config
+mkdir -p /opt/florida-freediving
+chown -R 1000:1000 /var/lib/florida-freediving/caddy-data
+chown -R 1000:1000 /var/lib/florida-freediving/caddy-config
+
+cat > /opt/florida-freediving/Caddyfile <<'CADDY'
+${domain_name} {
+  encode zstd gzip
+  reverse_proxy ff-app:8000 {
+    health_uri /health
+    health_interval 30s
+  }
+}
+CADDY
+
+cat > /usr/local/bin/deploy-florida-freediving <<'DEPLOY'
+#!/bin/bash
+set -euo pipefail
+
+if [ "$#" -ne 1 ]; then
+  echo "Usage: deploy-florida-freediving IMAGE_TAG" >&2
+  exit 2
+fi
+
+image_tag="$1"
+region="${aws_region}"
+repository="${repository_url}"
+registry=$(echo "$repository" | cut -d/ -f1)
+
+secret_value() {
+  aws secretsmanager get-secret-value \
+    --region "$region" \
+    --secret-id "$1" \
+    --query SecretString \
+    --output text
+}
+
+database_password=$(secret_value "${database_secret_arn}")
+officer_password_hash=$(secret_value "${officer_secret_arn}")
+session_secret=$(secret_value "${session_secret_arn}")
+
+aws ecr get-login-password --region "$region" | docker login --username AWS --password-stdin "$registry"
+docker network inspect florida-freediving >/dev/null 2>&1 || docker network create florida-freediving
+
+if ! docker inspect ff-postgres >/dev/null 2>&1; then
+  docker run -d \
+    --name ff-postgres \
+    --network florida-freediving \
+    --restart unless-stopped \
+    -e POSTGRES_DB=florida_freediving \
+    -e POSTGRES_USER=florida_freediving \
+    -e POSTGRES_PASSWORD="$database_password" \
+    -v /var/lib/florida-freediving/postgres:/var/lib/postgresql/data \
+    postgres:17-alpine
+else
+  docker start ff-postgres >/dev/null || true
+fi
+
+for attempt in $(seq 1 30); do
+  if docker exec ff-postgres pg_isready -U florida_freediving -d florida_freediving >/dev/null; then
+    break
+  fi
+  if [ "$attempt" -eq 30 ]; then
+    echo "PostgreSQL did not become ready" >&2
+    exit 1
+  fi
+  sleep 2
+done
+
+umask 077
+cat > /opt/florida-freediving/app.env <<ENV
+DATABASE_URL=postgresql+psycopg://florida_freediving:$database_password@ff-postgres:5432/florida_freediving
+OFFICER_PASSWORD_HASH=$officer_password_hash
+SESSION_SECRET=$session_secret
+COOKIE_SECURE=true
+ALLOWED_ORIGINS=https://${domain_name}
+ENV
+
+new_image="$repository:$image_tag"
+previous_image=$(docker inspect --format '{{.Config.Image}}' ff-app 2>/dev/null || true)
+docker pull "$new_image"
+
+run_app() {
+  docker run -d \
+    --name ff-app \
+    --network florida-freediving \
+    --restart unless-stopped \
+    --env-file /opt/florida-freediving/app.env \
+    -p 127.0.0.1:8000:8000 \
+    "$1"
+}
+
+docker rm -f ff-app >/dev/null 2>&1 || true
+run_app "$new_image"
+
+healthy=false
+for attempt in $(seq 1 30); do
+  if curl --fail --silent http://127.0.0.1:8000/health >/dev/null; then
+    healthy=true
+    break
+  fi
+  sleep 2
+done
+
+if [ "$healthy" != true ]; then
+  docker logs ff-app >&2 || true
+  docker rm -f ff-app >/dev/null 2>&1 || true
+  if [ -n "$previous_image" ]; then
+    echo "New image failed; restoring $previous_image" >&2
+    run_app "$previous_image"
+  fi
+  exit 1
+fi
+
+docker rm -f ff-caddy >/dev/null 2>&1 || true
+docker run -d \
+  --name ff-caddy \
+  --network florida-freediving \
+  --restart unless-stopped \
+  -p 80:80 \
+  -p 443:443 \
+  -p 443:443/udp \
+  -v /opt/florida-freediving/Caddyfile:/etc/caddy/Caddyfile:ro \
+  -v /var/lib/florida-freediving/caddy-data:/data \
+  -v /var/lib/florida-freediving/caddy-config:/config \
+  ${caddy_image}
+DEPLOY
+
+chmod 700 /usr/local/bin/deploy-florida-freediving

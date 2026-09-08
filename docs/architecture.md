@@ -10,16 +10,21 @@ promotion, or outbound email.
 
 ## Runtime topology
 
-The production artifact is one container. A Vite build produces static React assets, and
-FastAPI serves those assets plus the JSON API from the same origin. Requests under `/api/*`
-are never handled by the SPA fallback. Local development runs Vite and FastAPI separately;
-Vite proxies `/api` and `/health`, preserving the deployed request model.
+The production application artifact is one container. A Vite build produces static React assets,
+and FastAPI serves those assets plus the JSON API from the same origin. Caddy terminates HTTPS
+and proxies to the application container. PostgreSQL runs in a separate container on the same
+EC2 host. Requests under `/api/*` are never handled by the SPA fallback. Local development runs
+Vite and FastAPI separately; Vite proxies `/api` and `/health`, preserving the deployed request
+model.
 
 ```text
 Member or officer browser
           |
           v
- HTTPS application endpoint
+ Route 53 / Elastic IP
+          |
+          v
+ Caddy (automatic HTTPS)
           |
           v
  FastAPI container ---- serves ----> React static assets
@@ -27,7 +32,7 @@ Member or officer browser
           +---- /api/* -------------> route/service layer
                                       |
                                       v
-                                  PostgreSQL
+                              PostgreSQL container
 ```
 
 See [Infrastructure](infrastructure/README.md) for the AWS resource mapping.
@@ -83,4 +88,3 @@ and suppress operational warnings until explicitly deleted.
 - Rotating `SESSION_SECRET` invalidates every active officer session.
 
 Detailed route and payload contracts are in the [API reference](backend/api.md).
-

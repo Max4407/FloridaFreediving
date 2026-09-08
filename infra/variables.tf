@@ -11,15 +11,32 @@ variable "project_name" {
 }
 
 variable "domain_name" {
-  description = "Route 53 hosted-zone domain."
+  description = "Route 53 hosted-zone domain served by Caddy."
   type        = string
   default     = "floridafreediving.com"
 }
 
-variable "image_tag" {
-  description = "Immutable application image tag already pushed to ECR."
+variable "instance_type" {
+  description = "EC2 instance type running Caddy, the app, and PostgreSQL."
   type        = string
-  default     = "bootstrap"
+  default     = "t3.micro"
+}
+
+variable "data_volume_size" {
+  description = "Size in GiB of the persistent PostgreSQL EBS volume."
+  type        = number
+  default     = 20
+
+  validation {
+    condition     = var.data_volume_size >= 20
+    error_message = "The data volume must be at least 20 GiB."
+  }
+}
+
+variable "caddy_image" {
+  description = "Pinned official Caddy container image."
+  type        = string
+  default     = "caddy:2.11.4-alpine"
 }
 
 variable "officer_password_hash" {
@@ -27,4 +44,3 @@ variable "officer_password_hash" {
   type        = string
   sensitive   = true
 }
-
