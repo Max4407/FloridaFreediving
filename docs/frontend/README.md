@@ -18,6 +18,10 @@ The production build is served by FastAPI; during development Vite proxies backe
 - `easternDateTime(value)` formats timestamps in `America/New_York` regardless of browser zone.
 - `src/styles.css` supplies the responsive layout, calendar, forms, modal, status, and utility
   classes. There is no component or state-management library.
+- `src/assets/photos/` contains source-controlled freediving photography. `group.jpeg` backs the
+  landing page, `going_down.jpeg` backs signup dive details, and `floating.jpeg`, `mogging.jpeg`,
+  and `shipwreck.jpeg` back the calendar, officers, and gear tabs respectively. CSS overlays
+  preserve text contrast and use responsive cover crops.
 
 ## Member signup
 
@@ -66,4 +70,3 @@ operable and must not depend on color alone to communicate warnings.
 
 Run `npm test`, `npm run lint`, and `npm run build` from `frontend/`. The build writes `dist/`,
 which is generated and not committed.
-
