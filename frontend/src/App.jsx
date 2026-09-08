@@ -22,8 +22,7 @@ export default function App() {
   return (
     <main className="center-card landing-page">
       <section className="landing-card">
-        <p className="eyebrow">Florida Freediving</p>
-        <h1>Find your depth. Find your people.</h1>
+        <h1>Welcome to Florida Freediving!</h1>
         <p>Use the signup link shared by your dive organizer.</p>
         <a className="text-link" href="/dash">Officer dashboard</a>
       </section>

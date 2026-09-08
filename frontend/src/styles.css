@@ -85,7 +85,7 @@ textarea { resize: vertical; }
 .dashboard-inventory { background-image: linear-gradient(rgb(2 27 37 / 42%), rgb(2 27 37 / 60%)), url("./assets/photos/shipwreck.jpeg"); background-position: center 46%; }
 .dashboard { margin: auto; max-width: 1500px; min-height: calc(100vh - 76px); padding: clamp(1.5rem, 4vw, 4rem); }
 .dashboard-shell .page-heading, .dashboard-shell .page-heading h1, .dashboard-shell .page-heading .eyebrow { color: white; text-shadow: 0 2px 16px rgb(0 0 0 / 45%); }
-.dashboard-shell .calendar, .dashboard-shell .panel { backdrop-filter: blur(7px); background: rgb(255 255 255 / 93%); }
+.dashboard-shell .dashboard-shell .panel { background: rgba(255, 255, 255, 0.75); }
 .dashboard-shell .weekday { background: rgb(237 245 243 / 88%); }
 .dashboard-shell .calendar-day.blank { background: rgb(248 251 250 / 72%); }
 .page-heading, .section-heading { align-items: flex-start; display: flex; gap: 1rem; justify-content: space-between; }
@@ -93,12 +93,12 @@ textarea { resize: vertical; }
 .page-heading h1 { font-size: clamp(2rem, 4vw, 3rem); }
 .page-heading p { margin: 0; }
 .heading-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
-.calendar { background: white; border: 1px solid var(--line); border-radius: 15px; display: grid; grid-template-columns: repeat(7, 1fr); overflow: hidden; box-shadow: 0 15px 45px rgb(8 41 55 / 6%); }
+.calendar { background: rgba(255,255,255,0.4);  border: 1px solid var(--line); border-radius: 15px; display: grid; grid-template-columns: repeat(7, 1fr); overflow: hidden; box-shadow: 0 15px 45px rgb(8 41 55 / 6%); }
 .weekday { background: #edf5f3; color: #557176; font-size: .7rem; font-weight: 800; letter-spacing: .08em; padding: .8rem; text-transform: uppercase; }
 .calendar-day { border-right: 1px solid var(--line); border-top: 1px solid var(--line); min-height: 135px; padding: .6rem; }
 .calendar-day:nth-child(7n) { border-right: 0; }
 .calendar-day.blank { background: #f8fbfa; }
-.day-number { color: #6a7b80; display: block; font-size: .78rem; font-weight: 700; margin-bottom: .5rem; }
+.day-number { color: rgba(20,20,20,1.0); display: block; font-size: .78rem; font-weight: 700; margin-bottom: .5rem; }
 .calendar-event { background: #e4f3ef; border: 0; border-left: 3px solid var(--ocean); border-radius: 5px; color: var(--ink); display: grid; font-size: .75rem; gap: .1rem; margin-bottom: .35rem; padding: .5rem; text-align: left; width: 100%; }
 .calendar-event.warn { background: #fff0dc; border-left-color: #d67c22; }
 .calendar-event span { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -142,7 +142,7 @@ legend { color: #294650; font-size: .88rem; font-weight: 700; padding: 0 .4rem; 
 .chip-options { display: flex; flex-wrap: wrap; gap: .5rem; }
 .chip-check { align-items: center; background: #edf5f3; border-radius: 99px; display: flex; padding: .5rem .7rem; }
 .chip-check input { accent-color: var(--ocean); width: auto; }
-.panel { background: white; border: 1px solid var(--line); border-radius: 15px; box-shadow: 0 15px 45px rgb(8 41 55 / 6%); margin: auto; max-width: 1000px; padding: clamp(1.4rem, 4vw, 3rem); }
+.panel { background: rgba(255,255,255,0.5); border: 1px solid var(--line); border-radius: 15px; box-shadow: 0 15px 45px rgb(8 41 55 / 6%); margin: auto; max-width: 1000px; padding: clamp(1.4rem, 4vw, 3rem); }
 .inline-form { align-items: end; display: grid; grid-template-columns: 1fr auto; margin: 1.5rem 0; }
 .settings-list { display: grid; gap: .5rem; }
 .settings-list > div { align-items: center; border-top: 1px solid var(--line); display: flex; justify-content: space-between; padding: .9rem 0; }
@@ -161,9 +161,9 @@ legend { color: #294650; font-size: .88rem; font-weight: 700; padding: 0 .4rem; 
   .brand { flex: 1; }
   .topbar nav { order: 3; overflow-x: auto; width: 100%; }
   .page-heading { display: grid; }
-  .calendar { display: block; }
-  .weekday, .calendar-day.blank { display: none; }
-  .calendar-day { border: 0; border-bottom: 1px solid var(--line); min-height: 0; padding: 1rem; }
+  .calendar { display: block;}
+  .weekday, .calendar-day.blank { display: none;}
+  .calendar-day { border: 0; border-bottom: 1px solid var(--line); min-height: 0; padding: 1rem;}
   .calendar-day:not(:has(.calendar-event)) { display: none; }
   .dashboard-shell { background-attachment: scroll; }
 }
