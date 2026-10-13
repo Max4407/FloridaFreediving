@@ -93,6 +93,7 @@ def test_overlapping_fin_ranges_share_demand_without_false_shortage(
             json={
                 "name": f"Fin Diver {index}",
                 "email": f"fins{index}@example.com",
+                "phone": f"561-555-010{index}",
                 "needs_carpool": False,
                 "needs_gear": True,
                 "suit_size": "M",
@@ -107,6 +108,48 @@ def test_overlapping_fin_ranges_share_demand_without_false_shortage(
     assert sum(row["confirmed_needed"] for row in fin_rows) == 2
     assert not any(row["shortage"] for row in fin_rows)
     assert "Loaner gear demand exceeds inventory" not in detail["warnings"]
+
+
+def test_dive_detail_includes_contact_driving_and_confirmed_ride_totals(
+    officer_client, dive_payload
+):
+    dive_payload["capacity"] = 2
+    dive = create_dive(officer_client, dive_payload)
+    signup(officer_client, dive["public_id"], "rider@example.com")
+    driver = officer_client.post(
+        f"/api/public/dives/{dive['public_id']}/signups",
+        json={
+            "name": "Test Driver",
+            "email": "driver@example.com",
+            "phone": "561-555-0199",
+            "needs_carpool": False,
+            "can_drive": True,
+            "available_seats": 3,
+            "needs_gear": False,
+        },
+    )
+    waitlisted_driver = officer_client.post(
+        f"/api/public/dives/{dive['public_id']}/signups",
+        json={
+            "name": "Waitlisted Driver",
+            "email": "waitlisted-driver@example.com",
+            "phone": "561-555-0188",
+            "needs_carpool": False,
+            "can_drive": True,
+            "available_seats": 4,
+            "needs_gear": False,
+        },
+    )
+
+    assert driver.status_code == 201
+    assert waitlisted_driver.json()["status"] == "waitlisted"
+    detail = officer_client.get(f"/api/officer/dives/{dive['id']}").json()
+
+    assert detail["rides_needed"] == 1
+    assert detail["seats_available"] == 3
+    saved_driver = next(item for item in detail["confirmed"] if item["can_drive"])
+    assert saved_driver["phone"] == "561-555-0199"
+    assert saved_driver["available_seats"] == 3
 
 
 def test_deleting_dive_cascades_signups(db, officer_client, dive_payload):

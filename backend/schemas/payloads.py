@@ -14,16 +14,26 @@ class LoginInput(BaseModel):
 class SignupCreate(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     email: EmailStr
+    phone: str = Field(min_length=7, max_length=32)
     needs_carpool: bool = False
     pickup_location: str | None = Field(default=None, max_length=300)
+    can_drive: bool = False
+    available_seats: int | None = Field(default=None, ge=1, le=20)
     needs_gear: bool = False
     suit_size: SuitSize | None = None
     shoe_size: float | None = None
 
-    @field_validator("name", "pickup_location")
+    @field_validator("name", "phone", "pickup_location")
     @classmethod
     def strip_text(cls, value: str | None) -> str | None:
         return value.strip() if value else value
+
+    @field_validator("phone")
+    @classmethod
+    def valid_phone(cls, value: str) -> str:
+        if sum(character.isdigit() for character in value) < 7:
+            raise ValueError("phone number must contain at least 7 digits")
+        return value
 
     @field_validator("shoe_size")
     @classmethod
@@ -38,6 +48,12 @@ class SignupCreate(BaseModel):
             raise ValueError("pickup location is required when carpooling")
         if not self.needs_carpool:
             self.pickup_location = None
+        if self.needs_carpool and self.can_drive:
+            raise ValueError("a signup cannot request a ride and volunteer to drive")
+        if self.can_drive and self.available_seats is None:
+            raise ValueError("available seats are required when volunteering to drive")
+        if not self.can_drive:
+            self.available_seats = None
         if self.needs_gear and (self.suit_size is None or self.shoe_size is None):
             raise ValueError("suit and shoe size are required when renting gear")
         if not self.needs_gear:

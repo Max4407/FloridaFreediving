@@ -71,6 +71,14 @@ class Signup(Base):
         CheckConstraint(
             "shoe_size IS NULL OR (shoe_size >= 1 AND shoe_size <= 18)", name="ck_shoe"
         ),
+        CheckConstraint(
+            "(can_drive AND available_seats BETWEEN 1 AND 20) "
+            "OR (NOT can_drive AND available_seats IS NULL)",
+            name="ck_signup_driver_seats",
+        ),
+        CheckConstraint(
+            "NOT (needs_carpool AND can_drive)", name="ck_signup_carpool_or_driver"
+        ),
         Index("ix_signup_queue", "dive_id", "status", "queue_order"),
     )
 
@@ -78,10 +86,13 @@ class Signup(Base):
     dive_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("dives.id", ondelete="CASCADE"))
     name: Mapped[str] = mapped_column(String(160))
     email: Mapped[str] = mapped_column(String(320))
+    phone: Mapped[str] = mapped_column(String(32))
     status: Mapped[SignupStatus] = mapped_column(Enum(SignupStatus))
     queue_order: Mapped[int] = mapped_column(Integer)
     needs_carpool: Mapped[bool] = mapped_column(Boolean, default=False)
     pickup_location: Mapped[str | None] = mapped_column(String(300))
+    can_drive: Mapped[bool] = mapped_column(Boolean, default=False)
+    available_seats: Mapped[int | None] = mapped_column(Integer)
     needs_gear: Mapped[bool] = mapped_column(Boolean, default=False)
     suit_size: Mapped[SuitSize | None] = mapped_column(Enum(SuitSize))
     shoe_size: Mapped[float | None] = mapped_column(Float)

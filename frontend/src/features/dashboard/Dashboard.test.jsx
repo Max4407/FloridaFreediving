@@ -53,3 +53,35 @@ describe("Dashboard photography", () => {
     expect(shell).toHaveClass("dashboard-inventory");
   });
 });
+
+describe("Dashboard ride details", () => {
+  beforeEach(() => {
+    api.mockReset();
+    const startsAt = new Date().toISOString();
+    api.mockImplementation((path) => {
+      if (path === "/api/officer/dives") return Promise.resolve([{
+        id: "dive-1", public_id: "abc123", title: "Blue Heron", description: "", location: "Riviera Beach", starts_at: startsAt,
+        capacity: 10, confirmed_count: 2, waitlist_count: 0, rides_needed: 1, seats_available: 3,
+        officers: [], assigned_officer_ids: [], warnings: [], gear: [], waitlisted: [],
+        confirmed: [{
+          id: "signup-1", name: "Dana Driver", email: "dana@example.com", phone: "561-555-0199", status: "confirmed",
+          needs_carpool: false, pickup_location: null, can_drive: true, available_seats: 3,
+          needs_gear: false, suit_size: null, shoe_size: null,
+        }],
+      }]);
+      if (path === "/api/officer/officers") return Promise.resolve([]);
+      if (path === "/api/officer/inventory") return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+  });
+
+  it("shows confirmed ride totals and each diver's contact and driving details", async () => {
+    render(<Dashboard onLogout={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: /Blue Heron/ }));
+
+    expect(screen.getByText("Rides needed").nextSibling).toHaveTextContent("1");
+    expect(screen.getByText("Seats offered").nextSibling).toHaveTextContent("3");
+    expect(screen.getByText("561-555-0199")).toBeInTheDocument();
+    expect(screen.getByText("Driver · 3 seats")).toBeInTheDocument();
+  });
+});

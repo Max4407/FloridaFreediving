@@ -12,6 +12,7 @@ def signup(client, public_id, email):
         json={
             "name": "Test Diver",
             "email": email,
+            "phone": "561-555-0100",
             "needs_carpool": True,
             "pickup_location": "Downtown",
             "needs_gear": True,
@@ -54,12 +55,58 @@ def test_rental_and_carpool_details_are_conditional(client, officer_client, dive
         json={
             "name": "Test Diver",
             "email": "test@example.com",
+            "phone": "561-555-0100",
             "needs_carpool": True,
             "needs_gear": True,
         },
     )
 
     assert invalid.status_code == 422
+
+
+def test_phone_number_is_required(client, officer_client, dive_payload):
+    dive = create_dive(officer_client, dive_payload)
+
+    response = client.post(
+        f"/api/public/dives/{dive['public_id']}/signups",
+        json={
+            "name": "Test Diver",
+            "email": "no-phone@example.com",
+            "needs_carpool": False,
+            "needs_gear": False,
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_drivers_must_offer_seats_and_cannot_request_a_ride(
+    client, officer_client, dive_payload
+):
+    dive = create_dive(officer_client, dive_payload)
+    base_payload = {
+        "name": "Test Driver",
+        "email": "driver@example.com",
+        "phone": "561-555-0101",
+        "can_drive": True,
+        "needs_gear": False,
+    }
+
+    missing_seats = client.post(
+        f"/api/public/dives/{dive['public_id']}/signups", json=base_payload
+    )
+    conflicting_choice = client.post(
+        f"/api/public/dives/{dive['public_id']}/signups",
+        json={
+            **base_payload,
+            "available_seats": 3,
+            "needs_carpool": True,
+            "pickup_location": "Downtown",
+        },
+    )
+
+    assert missing_seats.status_code == 422
+    assert conflicting_choice.status_code == 422
 
 
 def test_public_dive_never_exposes_roster(client, officer_client, dive_payload):

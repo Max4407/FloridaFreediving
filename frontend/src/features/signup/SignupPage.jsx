@@ -4,8 +4,11 @@ import { api, easternDateTime } from "../../api";
 const initialForm = {
   name: "",
   email: "",
+  phone: "",
   needs_carpool: false,
   pickup_location: "",
+  can_drive: false,
+  available_seats: "",
   needs_gear: false,
   suit_size: "",
   shoe_size: "",
@@ -29,7 +32,18 @@ export function SignupPage() {
 
   function update(event) {
     const { name, type, checked, value } = event.target;
-    setForm((current) => ({ ...current, [name]: type === "checkbox" ? checked : value }));
+    setForm((current) => {
+      const next = { ...current, [name]: type === "checkbox" ? checked : value };
+      if (name === "needs_carpool" && checked) {
+        next.can_drive = false;
+        next.available_seats = "";
+      }
+      if (name === "can_drive" && checked) {
+        next.needs_carpool = false;
+        next.pickup_location = "";
+      }
+      return next;
+    });
   }
 
   async function submit(event) {
@@ -41,6 +55,7 @@ export function SignupPage() {
         body: JSON.stringify({
           ...form,
           pickup_location: form.needs_carpool ? form.pickup_location : null,
+          available_seats: form.can_drive ? Number(form.available_seats) : null,
           suit_size: form.needs_gear ? form.suit_size : null,
           shoe_size: form.needs_gear ? Number(form.shoe_size) : null,
         }),
@@ -84,6 +99,7 @@ export function SignupPage() {
         <form onSubmit={submit}>
           <label>Full name<input name="name" value={form.name} onChange={update} required maxLength="160" autoComplete="name" /></label>
           <label>Email address<input name="email" type="email" value={form.email} onChange={update} required autoComplete="email" /></label>
+          <label>Phone number<input name="phone" type="tel" value={form.phone} onChange={update} required minLength="7" maxLength="32" autoComplete="tel" /></label>
           <label className="check-row"><input name="needs_gear" type="checkbox" checked={form.needs_gear} onChange={update} /><span><strong>I need rental gear</strong><small>Includes a wetsuit, fins, mask, and weight set.</small></span></label>
           {form.needs_gear && <div className="field-grid">
             <label>Wetsuit size<select name="suit_size" value={form.suit_size} onChange={update} required><option value="">Select size</option>{["XS", "S", "M", "L", "XL"].map((size) => <option key={size}>{size}</option>)}</select></label>
@@ -91,6 +107,8 @@ export function SignupPage() {
           </div>}
           <label className="check-row"><input name="needs_carpool" type="checkbox" checked={form.needs_carpool} onChange={update} /><span><strong>I need a carpool</strong><small>Choose this if you do not have a car.</small></span></label>
           {form.needs_carpool && <label>Pickup location<input name="pickup_location" value={form.pickup_location} onChange={update} required maxLength="300" placeholder="Neighborhood, landmark, or address" /></label>}
+          <label className="check-row"><input name="can_drive" type="checkbox" checked={form.can_drive} onChange={update} /><span><strong>I can drive other divers</strong><small>Choose this if you can offer seats in your car.</small></span></label>
+          {form.can_drive && <label>Available passenger seats<input name="available_seats" type="number" min="1" max="20" value={form.available_seats} onChange={update} required /></label>}
           {state.error && <p className="error" role="alert">{state.error}</p>}
           <button className="primary" disabled={state.loading}>{state.loading ? "Submitting…" : dive.remaining ? "Join this dive" : "Join the waitlist"}</button>
         </form>

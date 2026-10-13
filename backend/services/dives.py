@@ -94,10 +94,13 @@ def create_signup(db: Session, dive_public_id: str, payload: SignupCreate) -> di
         dive_id=dive.id,
         name=payload.name,
         email=email,
+        phone=payload.phone,
         status=signup_status,
         queue_order=queue_order,
         needs_carpool=payload.needs_carpool,
         pickup_location=payload.pickup_location,
+        can_drive=payload.can_drive,
+        available_seats=payload.available_seats,
         needs_gear=payload.needs_gear,
         suit_size=payload.suit_size,
         shoe_size=payload.shoe_size,
@@ -167,9 +170,12 @@ def serialize_signup(signup: Signup) -> dict:
         "id": signup.id,
         "name": signup.name,
         "email": signup.email,
+        "phone": signup.phone,
         "status": signup.status.value,
         "needs_carpool": signup.needs_carpool,
         "pickup_location": signup.pickup_location,
+        "can_drive": signup.can_drive,
+        "available_seats": signup.available_seats,
         "needs_gear": signup.needs_gear,
         "suit_size": signup.suit_size.value if signup.suit_size else None,
         "shoe_size": signup.shoe_size,
@@ -296,6 +302,9 @@ def detail_view(db: Session, dive: Dive) -> dict:
         )
     )
     signups = sorted(loaded.signups, key=lambda signup: (signup.status.value, signup.queue_order))
+    confirmed_signups = [
+        signup for signup in signups if signup.status == SignupStatus.confirmed
+    ]
     confirmed_count = sum(signup.status == SignupStatus.confirmed for signup in signups)
     active_officers = [
         assignment.officer for assignment in loaded.assignments if assignment.officer.active
@@ -322,6 +331,8 @@ def detail_view(db: Session, dive: Dive) -> dict:
         "capacity": loaded.capacity,
         "confirmed_count": confirmed_count,
         "waitlist_count": sum(signup.status == SignupStatus.waitlisted for signup in signups),
+        "rides_needed": sum(signup.needs_carpool for signup in confirmed_signups),
+        "seats_available": sum(signup.available_seats or 0 for signup in confirmed_signups),
         "officers": [{"id": officer.id, "name": officer.name} for officer in active_officers],
         "assigned_officer_ids": [assignment.officer_id for assignment in loaded.assignments],
         "confirmed": [

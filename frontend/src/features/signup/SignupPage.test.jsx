@@ -16,6 +16,7 @@ describe("SignupPage", () => {
   it("only asks renters for gear sizes", async () => {
     render(<SignupPage />);
     expect(await screen.findByText("Blue Heron")).toBeInTheDocument();
+    expect(screen.getByLabelText("Phone number")).toBeRequired();
     expect(screen.queryByLabelText("Wetsuit size")).not.toBeInTheDocument();
     fireEvent.click(screen.getByLabelText(/I need rental gear/));
     expect(screen.getByLabelText("Wetsuit size")).toBeRequired();
@@ -27,5 +28,14 @@ describe("SignupPage", () => {
     await screen.findByText("Blue Heron");
     fireEvent.click(screen.getByLabelText(/I need a carpool/));
     await waitFor(() => expect(screen.getByLabelText("Pickup location")).toBeRequired());
+  });
+
+  it("asks volunteer drivers for their passenger capacity", async () => {
+    render(<SignupPage />);
+    await screen.findByText("Blue Heron");
+    fireEvent.click(screen.getByLabelText(/I can drive other divers/));
+
+    expect(screen.getByLabelText("Available passenger seats")).toBeRequired();
+    expect(screen.getByLabelText(/I need a carpool/)).not.toBeChecked();
   });
 });

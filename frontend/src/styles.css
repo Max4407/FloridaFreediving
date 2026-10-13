@@ -114,7 +114,7 @@ textarea { resize: vertical; }
 .share-row a { color: var(--ocean); font-size: .85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .warning-panel { background: #fff3df; border: 1px solid #f2c783; border-radius: 10px; color: #744713; padding: 1rem; }
 .warning-panel ul { margin: .5rem 0 0; padding-left: 1.3rem; }
-.stat-grid { display: grid; gap: .8rem; grid-template-columns: repeat(3, 1fr); margin: 1.4rem 0; }
+.stat-grid { display: grid; gap: .8rem; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); margin: 1.4rem 0; }
 .stat-grid div { background: #edf6f3; border-radius: 10px; display: grid; padding: 1rem; }
 .stat-grid span { color: #597277; font-size: .75rem; font-weight: 700; text-transform: uppercase; }
 .stat-grid strong { color: var(--ink); font-family: "Manrope", sans-serif; font-size: 1.7rem; }
