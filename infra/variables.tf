@@ -13,7 +13,7 @@ variable "project_name" {
 variable "domain_name" {
   description = "Route 53 hosted-zone domain served by Caddy."
   type        = string
-  default     = "floridafreediving.com"
+  default     = "flfreediving.com"
 }
 
 variable "instance_type" {

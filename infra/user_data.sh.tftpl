@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-dnf install -y docker xfsprogs curl
+dnf install -y docker xfsprogs
 mkdir -p /etc/docker
 cat > /etc/docker/daemon.json <<'JSON'
 {
