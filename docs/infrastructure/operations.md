@@ -11,28 +11,29 @@ jobs pass. Infrastructure plans, migration behavior, and single-host risk still 
 `.github/workflows/deploy.yml` runs on `main` and manual dispatch. GitHub Actions assumes
 `AWS_DEPLOY_ROLE_ARN` through OIDC and never stores a long-lived AWS key. The workflow:
 
-1. Initializes the locked S3 Terraform backend.
-2. Plans and applies networking, EC2, EBS, DNS, ECR, secrets, identity, and snapshot policy.
-3. Builds the complete application image and pushes immutable tag `${github.sha}` to ECR.
-4. Waits for the EC2 instance to register with Systems Manager.
-5. Uses SSM Run Command to invoke `/usr/local/bin/deploy-florida-freediving {tag}`.
-6. Verifies the public Caddy endpoint at `/health`.
+1. Reads the existing production instance from the `EC2_INSTANCE_ID` environment variable.
+2. Builds the complete application image and pushes immutable tag `${github.sha}` to ECR.
+3. Waits for the EC2 instance to register with Systems Manager.
+4. Uses SSM Run Command to invoke `/usr/local/bin/deploy-florida-freediving {tag}`.
+5. Verifies the public Caddy endpoint at `/health`.
 
 The deployment script refreshes runtime secrets, ensures PostgreSQL is ready, pulls the requested
 image, starts it, and checks loopback health. If health fails, it restores the prior application
 image automatically. Caddy is recreated only after the new app is healthy. The old ECR image is
 retained for later manual rollback.
 
-The GitHub role needs Terraform's infrastructure permissions plus ECR push and
-`ssm:SendCommand`, `ssm:GetCommandInvocation`, and `ssm:DescribeInstanceInformation` for the
-tagged production instance. Repository environment protection should gate this role.
+The GitHub role needs ECR push plus `ssm:SendCommand`, `ssm:GetCommandInvocation`, and
+`ssm:DescribeInstanceInformation` for the production instance. It does not need permission to
+modify Terraform-managed infrastructure. Repository environment protection should gate this
+role.
 
 ## First deployment
 
 Unlike the former ECS design, infrastructure can be created before an application image exists.
-Run the normal deploy workflow: Terraform creates the empty ECR repository and prepared host,
-then later steps build and deploy the first image. Caddy begins serving only after the app passes
-its first health check and DNS is available for certificate issuance.
+Provision the empty ECR repository and prepared host with Terraform from an approved
+administrative environment. Then configure the GitHub `production` environment and run the
+deploy workflow to build and deploy the first image. Caddy begins serving only after the app
+passes its first health check and DNS is available for certificate issuance.
 
 ## Database migrations
 

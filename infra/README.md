@@ -10,8 +10,8 @@ or RDS instance is used.
 - Terraform 1.12+, AWS CLI, Docker, and an AWS account with a public Route 53 hosted zone.
 - An encrypted, versioned S3 Terraform-state bucket using S3 lockfiles.
 - A bcrypt officer password hash supplied through `TF_VAR_officer_password_hash`.
-- For GitHub deployment, `AWS_DEPLOY_ROLE_ARN`, `TF_STATE_BUCKET`, and
-  `OFFICER_PASSWORD_HASH` environment secrets.
+- For GitHub deployment, an `AWS_DEPLOY_ROLE_ARN` environment secret and an
+  `EC2_INSTANCE_ID` environment variable.
 
 ## Provisioning
 
@@ -26,9 +26,10 @@ terraform apply -var="officer_password_hash=$OFFICER_PASSWORD_HASH"
 ```
 
 The instance boot script installs Docker, mounts the data disk, writes the Caddy configuration,
-and installs `/usr/local/bin/deploy-florida-freediving`. It does not deploy an app image. The
-GitHub workflow builds a commit-tagged image, pushes it to ECR, and invokes that script through
-Systems Manager Run Command.
+and installs `/usr/local/bin/deploy-florida-freediving`. It does not deploy an app image. After
+Terraform provisioning is complete, the GitHub workflow builds a commit-tagged image, pushes it
+to ECR, and invokes that script through Systems Manager Run Command. Routine application
+deployments do not plan or apply Terraform.
 
 ## Host layout
 

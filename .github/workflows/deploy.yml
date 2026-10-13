@@ -9,6 +9,11 @@ permissions:
   contents: read
   id-token: write
 
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: florida-freediving
+  APPLICATION_URL: https://flfreediving.com
+
 concurrency:
   group: production
   cancel-in-progress: false
@@ -22,46 +27,34 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@v5
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: us-east-1
-      - uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "1.12.2"
-
-      - name: Initialize Terraform
-        working-directory: infra
-        run: terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" -backend-config="key=florida-freediving/terraform.tfstate" -backend-config="region=us-east-1" -backend-config="use_lockfile=true"
-
-      - name: Plan infrastructure
-        working-directory: infra
-        env:
-          TF_VAR_officer_password_hash: ${{ secrets.OFFICER_PASSWORD_HASH }}
-        run: terraform plan -out=tfplan
-
-      - name: Apply infrastructure
-        working-directory: infra
-        run: terraform apply -auto-approve tfplan
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Read deployment targets
-        id: infrastructure
-        working-directory: infra
+        id: deployment
+        env:
+          INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
         run: |
-          echo "repository=$(terraform output -raw ecr_repository_url)" >> "$GITHUB_OUTPUT"
-          echo "instance=$(terraform output -raw instance_id)" >> "$GITHUB_OUTPUT"
-          echo "url=$(terraform output -raw application_url)" >> "$GITHUB_OUTPUT"
+          if [ -z "$INSTANCE_ID" ]; then
+            echo "The production environment variable EC2_INSTANCE_ID is required" >&2
+            exit 1
+          fi
+          account_id=$(aws sts get-caller-identity --query Account --output text)
+          echo "repository=$account_id.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY" >> "$GITHUB_OUTPUT"
+          echo "instance=$INSTANCE_ID" >> "$GITHUB_OUTPUT"
 
       - name: Login to ECR
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build and push image
         env:
-          IMAGE: ${{ steps.infrastructure.outputs.repository }}:${{ github.sha }}
+          IMAGE: ${{ steps.deployment.outputs.repository }}:${{ github.sha }}
         run: |
           docker build -t "$IMAGE" .
           docker push "$IMAGE"
 
       - name: Wait for Systems Manager
         env:
-          INSTANCE_ID: ${{ steps.infrastructure.outputs.instance }}
+          INSTANCE_ID: ${{ steps.deployment.outputs.instance }}
         run: |
           for attempt in $(seq 1 60); do
             status=$(aws ssm describe-instance-information --filters "Key=InstanceIds,Values=$INSTANCE_ID" --query "InstanceInformationList[0].PingStatus" --output text)
@@ -76,7 +69,7 @@ jobs:
       - name: Deploy image through Systems Manager
         env:
           IMAGE_TAG: ${{ github.sha }}
-          INSTANCE_ID: ${{ steps.infrastructure.outputs.instance }}
+          INSTANCE_ID: ${{ steps.deployment.outputs.instance }}
         run: |
           command_id=$(aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
@@ -96,6 +89,4 @@ jobs:
           exit "$wait_status"
 
       - name: Verify public health
-        env:
-          APPLICATION_URL: ${{ steps.infrastructure.outputs.url }}
         run: curl --fail --retry 10 --retry-delay 6 "$APPLICATION_URL/health"
